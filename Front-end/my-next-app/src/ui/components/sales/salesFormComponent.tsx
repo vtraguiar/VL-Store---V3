@@ -1,3 +1,5 @@
+import SearchCombobox from "../SearchCombobox";
+import { focusFirstError } from "../../../utils/validationUtils";
 import React, { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -64,7 +66,6 @@ const SalesForm: React.FC<SalesFormProps> = ({
   produtosDisponiveis,
 }) => {
   // Hooks de estado
-  const [codigoVenda, setCodigoVenda] = useState<string>("");
   const [vendedorResponsavelId, setVendedorResponsavelId] =
     useState<string>("");
   const [dataVenda, setDataVenda] = useState<string>("");
@@ -84,20 +85,24 @@ const SalesForm: React.FC<SalesFormProps> = ({
 
   // Estados para mensagens e pesquisas
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const clearFieldError = (id: string) =>
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   const [success, setSuccess] = useState("");
   const [produtoSearchTerm, setProdutoSearchTerm] = useState<string>("");
-  const [showProductDropdown, setShowProductDropdown] =
-    useState<boolean>(false);
   const [vendedorSearchTerm, setVendedorSearchTerm] = useState<string>("");
-  const [showVendedorDropdown, setShowVendedorDropdown] =
-    useState<boolean>(false);
 
   // Função para exibir mensagens de feedback
   const showMessage = (message: string, type: "success" | "error") => {
     if (type === "error") {
       setError(message);
-      setTimeout(() => setError(""), 5000);
+      setSuccess("");
     } else {
+      setError("");
       setSuccess(message);
       setTimeout(() => setSuccess(""), 5000);
     }
@@ -105,9 +110,6 @@ const SalesForm: React.FC<SalesFormProps> = ({
 
   // Efeito para gerar código da venda e data inicial
   useEffect(() => {
-    const generateSaleCode = () =>
-      `VENDA-${Math.floor(Math.random() * 90000) + 10000}`;
-    setCodigoVenda(generateSaleCode());
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -120,12 +122,15 @@ const SalesForm: React.FC<SalesFormProps> = ({
 
   // Efeito para buscar caixas quando um vendedor é selecionado
   useEffect(() => {
+    let cancelled = false;
     const fetchCaixasDaLoja = async () => {
+      setCaixasDisponiveis([]);
       // Nome da função alterado para clareza
       // Se nenhum vendedor estiver selecionado, limpa os caixas
       if (!vendedorResponsavelId || !jwtToken) {
         setCaixasDisponiveis([]);
         setCaixaSelecionadoId("");
+        setIsLoadingCaixas(false);
         return;
       }
 
@@ -133,13 +138,13 @@ const SalesForm: React.FC<SalesFormProps> = ({
       setCaixaSelecionadoId(""); // 1. Encontrar o objeto completo do vendedor selecionado para obter o id_loja
 
       const vendedorSelecionado = vendedoresDisponiveis.find(
-        (v) => v.id_funcionario === vendedorResponsavelId
+        (v) => v.id_funcionario === vendedorResponsavelId,
       ); // Se não encontrar o vendedor ou o id_loja, interrompe a execução
 
       if (!vendedorSelecionado || !vendedorSelecionado.id_loja) {
         showMessage(
           "Dados do vendedor estão incompletos (sem loja associada).",
-          "error"
+          "error",
         );
         setIsLoadingCaixas(false);
         return;
@@ -150,11 +155,12 @@ const SalesForm: React.FC<SalesFormProps> = ({
       try {
         const response = await axios.get(
           `https://vl-store-v2.onrender.com/api/caixas/loja/${id_loja}`,
-          { headers: { Authorization: `Bearer ${jwtToken}` } }
+          { headers: { Authorization: `Bearer ${jwtToken}` } },
         ); // --- MUDANÇA PRINCIPAL AQUI --- // Filtra apenas por caixas com status "ABERTO", independente do funcionário.
 
+        if (cancelled) return;
         const caixasAbertosNaLoja = response.data.data.filter(
-          (caixa: any) => caixa.status === "ABERTO"
+          (caixa: any) => caixa.status === "ABERTO",
         );
 
         // LOG para verificar o resultado do novo filtro
@@ -168,21 +174,25 @@ const SalesForm: React.FC<SalesFormProps> = ({
           // Mensagem de erro atualizada para refletir a nova lógica
           showMessage(
             "Não há nenhum caixa aberto nesta loja para registrar a venda.",
-            "error"
+            "error",
           );
         }
-      } catch (err: any) {
+      } catch {
+        if (cancelled) return;
         showMessage(
-          err.response?.data?.message || "Erro ao carregar caixas.",
-          "error"
+          "Não foi possível carregar os caixas. Verifique sua conexão e selecione o vendedor novamente.",
+          "error",
         );
         setCaixasDisponiveis([]);
       } finally {
-        setIsLoadingCaixas(false);
+        if (!cancelled) setIsLoadingCaixas(false);
       }
     };
 
-    fetchCaixasDaLoja(); // O nome da função foi atualizado aqui também
+    fetchCaixasDaLoja();
+    return () => {
+      cancelled = true;
+    }; // O nome da função foi atualizado aqui também
   }, [vendedorResponsavelId, jwtToken, vendedoresDisponiveis]); // As dependências continuam as mesmas
 
   // ... resto do código do componente ...
@@ -191,7 +201,7 @@ const SalesForm: React.FC<SalesFormProps> = ({
   useEffect(() => {
     if (produtoSelecionadoId) {
       const produto = produtosDisponiveis.find(
-        (p) => p.id_variacao === produtoSelecionadoId
+        (p) => p.id_variacao === produtoSelecionadoId,
       );
       if (produto) {
         setPrecoUnitario(produto.preco_venda.toFixed(2));
@@ -205,56 +215,85 @@ const SalesForm: React.FC<SalesFormProps> = ({
   const valorTotalVenda = useMemo(() => {
     const subtotalProdutos = carrinhoVenda.reduce(
       (sum, item) => sum + item.quantidade * item.precoUnitario,
-      0
+      0,
     );
     const descontoNum = parseFloat(descontoVenda.replace(",", ".")) || 0;
     const acrescimoNum = parseFloat(acrescimoVenda.replace(",", ".")) || 0;
     return subtotalProdutos - descontoNum + acrescimoNum;
   }, [carrinhoVenda, descontoVenda, acrescimoVenda]);
 
+  const subtotalProdutos = carrinhoVenda.reduce(
+    (sum, item) => sum + item.quantidade * item.precoUnitario,
+    0,
+  );
+  const descontoNum = Number(descontoVenda.replace(",", "."));
+  const acrescimoNum = Number(acrescimoVenda.replace(",", "."));
+  const descontoError =
+    !Number.isFinite(descontoNum) || descontoNum < 0
+      ? "Informe um desconto válido e não negativo."
+      : descontoNum > subtotalProdutos
+        ? `O desconto não pode ser maior que R$ ${subtotalProdutos.toFixed(2)}`
+        : "";
+  const acrescimoError =
+    !Number.isFinite(acrescimoNum) || acrescimoNum < 0
+      ? "Informe um acréscimo válido e não negativo."
+      : "";
+
   // Filtros para pesquisa de produtos e vendedores
   const filteredProducts = useMemo(() => {
-    if (!produtoSearchTerm.trim()) return [];
+    if (!produtoSearchTerm.trim()) return produtosDisponiveis;
     const term = produtoSearchTerm.toLowerCase();
     return produtosDisponiveis.filter(
       (p) =>
         p.produto.nome.toLowerCase().includes(term) ||
         p.descricao_variacao.toLowerCase().includes(term) ||
-        p.produto.referencia.toLowerCase().includes(term)
+        p.produto.referencia.toLowerCase().includes(term),
     );
   }, [produtoSearchTerm, produtosDisponiveis]);
 
   const filteredVendedores = useMemo(() => {
-    if (!vendedorSearchTerm.trim()) return [];
+    if (!vendedorSearchTerm.trim()) return vendedoresDisponiveis;
     const term = vendedorSearchTerm.toLowerCase();
     return vendedoresDisponiveis.filter(
       (v) =>
         v.nome.toLowerCase().includes(term) ||
-        (v.cargo && v.cargo.toLowerCase().includes(term))
+        (v.cargo && v.cargo.toLowerCase().includes(term)),
     );
   }, [vendedorSearchTerm, vendedoresDisponiveis]);
 
   // Função para adicionar produto ao carrinho
   const handleAdicionarProdutoVenda = () => {
+    if (!Number.isInteger(quantidadeProduto) || quantidadeProduto < 1) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        quantidadeProduto: "Informe uma quantidade inteira (mínimo 1).",
+      }));
+      focusFirstError({ quantidadeProduto: "Informe uma quantidade." });
+      return;
+    }
     if (!produtoSelecionadoId) {
-      showMessage("Selecione um produto para adicionar.", "error");
+      setFieldErrors((prev) => ({
+        ...prev,
+        produtoVenda: "Selecione um produto para adicionar.",
+      }));
+      focusFirstError({ produtoVenda: "Selecione um produto." });
       return;
     }
     const produto = produtosDisponiveis.find(
-      (p) => p.id_variacao === produtoSelecionadoId
+      (p) => p.id_variacao === produtoSelecionadoId,
     );
     if (!produto) return;
 
     const itemExistente = carrinhoVenda.find(
-      (item) => item.id_variacao === produtoSelecionadoId
+      (item) => item.id_variacao === produtoSelecionadoId,
     );
     if (itemExistente) {
       setCarrinhoVenda(
         carrinhoVenda.map((item) =>
           item.id_variacao === produtoSelecionadoId
             ? { ...item, quantidade: item.quantidade + quantidadeProduto }
-            : item
-        )
+            : item,
+        ),
       );
     } else {
       const novoItem: CartItem = {
@@ -267,31 +306,32 @@ const SalesForm: React.FC<SalesFormProps> = ({
       };
       setCarrinhoVenda([...carrinhoVenda, novoItem]);
     }
+    clearFieldError("produtoVenda");
+    clearFieldError("quantidadeProduto");
     setProdutoSelecionadoId("");
     setQuantidadeProduto(1);
     setPrecoUnitario("");
     setProdutoSearchTerm("");
-    setShowProductDropdown(false);
   };
 
   const handleRemoverProdutoDoCarrinho = (idVariacao: string) => {
     setCarrinhoVenda(
-      carrinhoVenda.filter((item) => item.id_variacao !== idVariacao)
+      carrinhoVenda.filter((item) => item.id_variacao !== idVariacao),
     );
   };
 
   const handleNumericInputChange = (
     setter: React.Dispatch<React.SetStateAction<string>>,
-    value: string
+    value: string,
   ) => {
-    const sanitizedValue = value.replace(/[^0-9,.]/g, "").replace(",", ".");
+    const sanitizedValue = value.replace(",", ".");
     if (sanitizedValue.split(".").length > 2) return;
     setter(sanitizedValue);
   };
 
   // Função para resetar o formulário
   const resetForm = () => {
-    setCodigoVenda(`VENDA-${Math.floor(Math.random() * 90000) + 10000}`);
+    setFieldErrors({});
     setVendedorResponsavelId("");
     setVendedorSearchTerm("");
     setFormaPagamento("");
@@ -309,16 +349,25 @@ const SalesForm: React.FC<SalesFormProps> = ({
   const handleSubmitVenda = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (
-      !vendedorResponsavelId ||
-      !formaPagamento ||
-      !caixaSelecionadoId ||
-      carrinhoVenda.length === 0
-    ) {
-      showMessage(
-        "Preencha todos os campos obrigatórios: vendedor, forma de pagamento, caixa e adicione ao menos um produto.",
-        "error"
-      );
+    if (isSubmitting) return;
+    setError("");
+    const errors: Record<string, string> = {};
+    if (!vendedorResponsavelId)
+      errors.vendedorResponsavel = "Selecione o vendedor responsável.";
+    if (!formaPagamento)
+      errors.formaPagamento = "Selecione a forma de pagamento.";
+    if (!caixaSelecionadoId) errors.caixa = "Selecione um caixa aberto.";
+    if (!carrinhoVenda.length)
+      errors.produtoVenda = "Adicione ao menos um produto à venda.";
+    if (descontoError) errors.descontoVenda = descontoError;
+    if (acrescimoError) errors.acrescimoVenda = acrescimoError;
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      focusFirstError(errors);
+      return;
+    }
+    if (!Number.isFinite(valorTotalVenda) || valorTotalVenda < 0) {
+      showMessage("Confira os valores da venda antes de finalizar.", "error");
       return;
     }
 
@@ -344,7 +393,7 @@ const SalesForm: React.FC<SalesFormProps> = ({
       const responseVenda = await axios.post(
         "https://vl-store-v2.onrender.com/api/vendas",
         salePayload,
-        config
+        config,
       );
 
       console.log(responseVenda);
@@ -358,7 +407,7 @@ const SalesForm: React.FC<SalesFormProps> = ({
       // Validação da resposta da primeira chamada
       if (!idVendaCriada) {
         throw new Error(
-          "A resposta do servidor para a criação da venda não contém os dados necessários (ID)."
+          "A resposta do servidor para a criação da venda não contém os dados necessários (ID).",
         );
       }
 
@@ -375,28 +424,23 @@ const SalesForm: React.FC<SalesFormProps> = ({
       await axios.post(
         `https://vl-store-v2.onrender.com/api/caixas/${caixaSelecionadoId}/movimentacoes`,
         movimentacaoPayload,
-        config
+        config,
       );
 
       // Se ambas as requisições deram certo, mostre o sucesso.
       showMessage(
         "Venda e movimentação de caixa registradas com sucesso!",
-        "success"
+        "success",
       );
       onSaleRegistered(vendaCriada);
       resetForm();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Erro no processo de registro de venda:", error);
 
-      // Mensagem de erro mais específica
-      const backendMessage =
-        error.response?.data?.message || "Ocorreu um erro desconhecido.";
-      const errorMessage = error.message.includes("dados necessários")
-        ? error.message
-        : `Falha ao registrar venda ou movimentação. Erro: ${backendMessage}`;
-
-      showMessage(errorMessage, "error");
-      // Aqui você pode adicionar uma lógica para notificar o usuário que a venda pode ter sido criada, mas a movimentação falhou.
+      showMessage(
+        "Não foi possível concluir a venda ou a movimentação. Confira os registros antes de tentar novamente.",
+        "error",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -406,8 +450,12 @@ const SalesForm: React.FC<SalesFormProps> = ({
   return (
     <div className="quinary text-white p-4 rounded-5 white-light-small d-flex flex-column w-75 mx-auto h-100">
       {/* Alertas de erro e sucesso */}
-      {error && <div className="alert alert-danger">{error}</div>}
-      {success && <div className="alert alert-success">{success}</div>}
+
+      {success && (
+        <div role="status" className="alert alert-success alert-inline">
+          {success}
+        </div>
+      )}
 
       <div className="mb-3">
         <h5 className="mb-0 text-white">
@@ -419,7 +467,15 @@ const SalesForm: React.FC<SalesFormProps> = ({
         className="flex-grow-1"
         style={{ overflowY: "auto", paddingRight: "10px" }}
       >
-        <form id="sales-form-content" onSubmit={handleSubmitVenda} noValidate>
+        <form
+          onChangeCapture={(e) =>
+            clearFieldError((e.target as HTMLInputElement).id)
+          }
+          id="sales-form-content"
+          onSubmit={handleSubmitVenda}
+          noValidate
+        >
+          <p>* Campo obrigatório</p>
           {/* Linha 1: Vendedor e Data */}
           <div className="row mb-3">
             {/* Vendedor */}
@@ -428,44 +484,31 @@ const SalesForm: React.FC<SalesFormProps> = ({
                 htmlFor="vendedorResponsavel"
                 className="form-label text-white-75 small"
               >
-                Vendedor Responsável
+                Vendedor Responsável *
               </label>
-              <input
-                type="text"
-                className="form-control input-form"
-                placeholder="Buscar vendedor..."
+              <SearchCombobox
+                id="vendedorResponsavel"
                 value={vendedorSearchTerm}
-                onChange={(e) => {
-                  setVendedorSearchTerm(e.target.value);
-                  setShowVendedorDropdown(true);
+                disabled={isSubmitting}
+                error={fieldErrors.vendedorResponsavel}
+                options={filteredVendedores.map((v) => ({
+                  id: v.id_funcionario,
+                  label: `${v.nome}${v.cargo ? ` (${v.cargo})` : ""}`,
+                }))}
+                onChange={(value) => {
+                  setVendedorSearchTerm(value);
+                  setVendedorResponsavelId("");
+                  setCaixaSelecionadoId("");
+                  clearFieldError("vendedorResponsavel");
+                  clearFieldError("caixa");
                 }}
-                onFocus={() => setShowVendedorDropdown(true)}
-                onBlur={() =>
-                  setTimeout(() => setShowVendedorDropdown(false), 200)
-                }
+                onSelect={(id, label) => {
+                  setVendedorResponsavelId(id);
+                  setVendedorSearchTerm(label);
+                  clearFieldError("vendedorResponsavel");
+                  clearFieldError("caixa");
+                }}
               />
-              {showVendedorDropdown && (
-                <ul className="list-group position-absolute w-100 mt-1 z-index-dropdown bg-dark border rounded">
-                  {(vendedorSearchTerm && filteredVendedores.length > 0
-                    ? filteredVendedores
-                    : vendedoresDisponiveis
-                  ).map((v) => (
-                    <li
-                      key={v.id_funcionario}
-                      className="list-group-item bg-dark text-white cursor-pointer hover-light"
-                      onClick={() => {
-                        setVendedorResponsavelId(v.id_funcionario);
-                        setVendedorSearchTerm(
-                          `${v.nome}${v.cargo ? ` (${v.cargo})` : ""}`
-                        );
-                        setShowVendedorDropdown(false);
-                      }}
-                    >
-                      {v.nome} {v.cargo && `(${v.cargo})`}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
             {/* Data e Hora */}
             <div className="col-md-6">
@@ -480,9 +523,13 @@ const SalesForm: React.FC<SalesFormProps> = ({
                 className="form-control input-form"
                 id="dataVenda"
                 value={dataVenda}
-                onChange={(e) => setDataVenda(e.target.value)}
-                required
+                readOnly
+                aria-readonly="true"
+                aria-describedby="dataVenda-ajuda"
               />
+              <p id="dataVenda-ajuda" className="form-text text-light">
+                Registrada automaticamente ao finalizar
+              </p>
             </div>
           </div>
 
@@ -494,11 +541,18 @@ const SalesForm: React.FC<SalesFormProps> = ({
                 htmlFor="formaPagamento"
                 className="form-label text-white-75 small"
               >
-                Forma de Pagamento
+                Forma de Pagamento *
               </label>
               <select
                 id="formaPagamento"
-                className="form-control p-2 custom-select input-form"
+                aria-invalid={!!fieldErrors.formaPagamento}
+                aria-describedby={
+                  fieldErrors.formaPagamento ? "formaPagamento-erro" : undefined
+                }
+                className={
+                  "form-control p-2 custom-select input-form" +
+                  (fieldErrors.formaPagamento ? " is-invalid" : "")
+                }
                 value={formaPagamento}
                 onChange={(e) => setFormaPagamento(e.target.value)}
                 required
@@ -535,15 +589,28 @@ const SalesForm: React.FC<SalesFormProps> = ({
                   PIX
                 </option>
               </select>
+              {fieldErrors.formaPagamento && (
+                <div
+                  id="formaPagamento-erro"
+                  className="invalid-feedback d-block"
+                >
+                  {fieldErrors.formaPagamento}
+                </div>
+              )}
             </div>
             {/* Caixa */}
             <div className="col-md-6">
               <label htmlFor="caixa" className="form-label text-white-75 small">
-                Caixa
+                Caixa *
               </label>
               <select
                 id="caixa"
-                className="form-control p-2  custom-select input-form"
+                aria-invalid={!!fieldErrors.caixa}
+                aria-describedby={fieldErrors.caixa ? "caixa-erro" : undefined}
+                className={
+                  "form-control p-2  custom-select input-form" +
+                  (fieldErrors.caixa ? " is-invalid" : "")
+                }
                 value={caixaSelecionadoId}
                 onChange={(e) => setCaixaSelecionadoId(e.target.value)}
                 disabled={caixasDisponiveis.length === 0}
@@ -554,11 +621,13 @@ const SalesForm: React.FC<SalesFormProps> = ({
                   value=""
                   disabled
                 >
-                  {isLoadingCaixas
-                    ? "Carregando caixas..."
-                    : vendedorResponsavelId
-                    ? "Selecione um caixa aberto..."
-                    : "Abra um caixa para adicionar uma venda"}
+                  {!vendedorResponsavelId
+                    ? "Selecione o vendedor primeiro"
+                    : isLoadingCaixas
+                      ? "Carregando caixas..."
+                      : caixasDisponiveis.length === 0
+                        ? "Nenhum caixa aberto nesta loja"
+                        : "Selecione um caixa aberto..."}
                 </option>
                 {caixasDisponiveis.map((caixa) => (
                   <option key={caixa.id_caixa} value={caixa.id_caixa}>
@@ -571,11 +640,16 @@ const SalesForm: React.FC<SalesFormProps> = ({
                   </option>
                 ))}
               </select>
+              {fieldErrors.caixa && (
+                <div id="caixa-erro" className="invalid-feedback d-block">
+                  {fieldErrors.caixa}
+                </div>
+              )}
               {!isLoadingCaixas &&
                 vendedorResponsavelId &&
                 caixasDisponiveis.length === 0 && (
                   <div className="text-danger small mt-1">
-                    Nenhum caixa aberto para este vendedor.
+                    Nenhum caixa aberto nesta loja.
                   </div>
                 )}
             </div>
@@ -594,42 +668,28 @@ const SalesForm: React.FC<SalesFormProps> = ({
                 htmlFor="produtoVenda"
                 className="form-label text-white-75 small mb-1"
               >
-                Produto
+                Produto *
               </label>
-              <input
-                type="text"
-                className="form-control input-form"
-                placeholder="Buscar produto..."
+              <SearchCombobox
+                id="produtoVenda"
                 value={produtoSearchTerm}
-                onChange={(e) => {
-                  setProdutoSearchTerm(e.target.value);
-                  setShowProductDropdown(true);
+                disabled={isSubmitting}
+                error={fieldErrors.produtoVenda}
+                options={filteredProducts.map((p) => ({
+                  id: p.id_variacao,
+                  label: `${p.produto.nome} (REF: ${p.produto.referencia}) - ${p.descricao_variacao}`,
+                }))}
+                onChange={(value) => {
+                  setProdutoSearchTerm(value);
+                  setProdutoSelecionadoId("");
+                  clearFieldError("produtoVenda");
                 }}
-                onFocus={() => setShowProductDropdown(true)}
-                onBlur={() =>
-                  setTimeout(() => setShowProductDropdown(false), 200)
-                }
+                onSelect={(id, label) => {
+                  setProdutoSelecionadoId(id);
+                  setProdutoSearchTerm(label);
+                  clearFieldError("produtoVenda");
+                }}
               />
-              {showProductDropdown && filteredProducts.length > 0 && (
-                <ul className="list-group position-absolute w-100 mt-1 z-index-dropdown bg-dark border rounded">
-                  {filteredProducts.map((p) => (
-                    <li
-                      key={p.id_variacao}
-                      className="list-group-item bg-dark text-white cursor-pointer hover-light"
-                      onClick={() => {
-                        setProdutoSelecionadoId(p.id_variacao);
-                        setProdutoSearchTerm(
-                          `${p.produto.nome} - ${p.descricao_variacao}`
-                        );
-                        setShowProductDropdown(false);
-                      }}
-                    >
-                      {p.produto.nome} (REF: {p.produto.referencia}) -{" "}
-                      {p.descricao_variacao}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
             {/* Quantidade */}
             <div className="col-md-2">
@@ -637,18 +697,33 @@ const SalesForm: React.FC<SalesFormProps> = ({
                 htmlFor="quantidadeProduto"
                 className="form-label text-white-75 small mb-1"
               >
-                Qtd.
+                Qtd. *
               </label>
               <input
                 type="number"
-                className="form-control input-form"
-                id="quantidadeProduto"
-                value={quantidadeProduto}
-                onChange={(e) =>
-                  setQuantidadeProduto(parseInt(e.target.value, 10) || 1)
+                className={
+                  "form-control input-form" +
+                  (fieldErrors.quantidadeProduto ? " is-invalid" : "")
                 }
+                id="quantidadeProduto"
+                aria-invalid={!!fieldErrors.quantidadeProduto}
+                aria-describedby={
+                  fieldErrors.quantidadeProduto
+                    ? "quantidadeProduto-erro"
+                    : undefined
+                }
+                value={quantidadeProduto}
+                onChange={(e) => setQuantidadeProduto(Number(e.target.value))}
                 min="1"
               />
+              {fieldErrors.quantidadeProduto && (
+                <div
+                  id="quantidadeProduto-erro"
+                  className="invalid-feedback d-block"
+                >
+                  {fieldErrors.quantidadeProduto}
+                </div>
+              )}
             </div>
             {/* Preço Unitário */}
             <div className="col-md-2">
@@ -743,14 +818,29 @@ const SalesForm: React.FC<SalesFormProps> = ({
               </label>
               <input
                 type="text"
-                className="form-control input-form"
+                className={
+                  "form-control input-form" +
+                  (descontoError ? " is-invalid" : "")
+                }
                 id="descontoVenda"
+                aria-invalid={!!descontoError}
+                aria-describedby={
+                  descontoError ? "descontoVenda-erro" : undefined
+                }
                 placeholder="0.00"
                 value={descontoVenda}
                 onChange={(e) =>
                   handleNumericInputChange(setDescontoVenda, e.target.value)
                 }
               />
+              {descontoError && (
+                <div
+                  id="descontoVenda-erro"
+                  className="invalid-feedback d-block"
+                >
+                  {descontoError}
+                </div>
+              )}
             </div>
             <div className="col-md-6">
               <label
@@ -761,16 +851,36 @@ const SalesForm: React.FC<SalesFormProps> = ({
               </label>
               <input
                 type="text"
-                className="form-control input-form"
+                className={
+                  "form-control input-form" +
+                  (acrescimoError ? " is-invalid" : "")
+                }
                 id="acrescimoVenda"
+                aria-invalid={!!acrescimoError}
+                aria-describedby={
+                  acrescimoError ? "acrescimoVenda-erro" : undefined
+                }
                 placeholder="0.00"
                 value={acrescimoVenda}
                 onChange={(e) =>
                   handleNumericInputChange(setAcrescimoVenda, e.target.value)
                 }
               />
+              {acrescimoError && (
+                <div
+                  id="acrescimoVenda-erro"
+                  className="invalid-feedback d-block"
+                >
+                  {acrescimoError}
+                </div>
+              )}
             </div>
           </div>
+          {error && (
+            <div role="alert" className="alert alert-danger alert-inline">
+              {error}
+            </div>
+          )}
         </form>
       </div>
 
@@ -782,7 +892,10 @@ const SalesForm: React.FC<SalesFormProps> = ({
         <div>
           <h4 className="text-white mb-0">
             Total:{" "}
-            <span className="font-weight-bold" style={{ color: "#86efac" }}>
+            <span
+              className="font-weight-bold"
+              style={{ color: valorTotalVenda < 0 ? "#fca5a5" : "#86efac" }}
+            >
               R$ {valorTotalVenda.toFixed(2)}
             </span>
           </h4>
@@ -792,7 +905,15 @@ const SalesForm: React.FC<SalesFormProps> = ({
           form="sales-form-content"
           className="btn primaria px-4 py-2"
           disabled={
-            isSubmitting || !caixaSelecionadoId || carrinhoVenda.length === 0
+            isSubmitting ||
+            isLoadingCaixas ||
+            !caixaSelecionadoId ||
+            carrinhoVenda.length === 0 ||
+            valorTotalVenda < 0 ||
+            !Number.isFinite(valorTotalVenda) ||
+            !!descontoError ||
+            !!acrescimoError ||
+            Object.keys(fieldErrors).length > 0
           }
         >
           {isSubmitting ? (

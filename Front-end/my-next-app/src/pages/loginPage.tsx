@@ -1,3 +1,4 @@
+import { isValidEmail, focusFirstError } from "../utils/validationUtils";
 // pages/authPage.tsx
 import { useState } from "react";
 import Head from "next/head";
@@ -14,6 +15,13 @@ const AuthPage: React.FC = () => {
   const [password, setPassword] = useState("");
   const [userType, setUserType] = useState("funcionario");
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const clearFieldError = (id: string) =>
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   const [loading, setLoading] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
 
@@ -35,9 +43,12 @@ const AuthPage: React.FC = () => {
     setLoading(true);
 
     try {
-      if (!email || !password) {
-        setError("Email e senha são obrigatórios.");
-        setLoading(false);
+      const errors: Record<string, string> = {};
+      if (!isValidEmail(email)) errors.email = "Informe um e-mail válido.";
+      if (!password) errors.password = "Informe a senha.";
+      setFieldErrors(errors);
+      if (Object.keys(errors).length) {
+        focusFirstError(errors);
         return;
       }
 
@@ -54,7 +65,7 @@ const AuthPage: React.FC = () => {
         payload,
         {
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
 
       const data = response.data;
@@ -67,24 +78,18 @@ const AuthPage: React.FC = () => {
           localStorage.setItem("userData", JSON.stringify(data.data.usuario));
         }
 
-        axios.defaults.headers.common[
-          "Authorization"
-        ] = `Bearer ${data.data.token}`;
+        axios.defaults.headers.common["Authorization"] =
+          `Bearer ${data.data.token}`;
         router.push("/menuPage");
       } else {
-        setError(data.message || "Usuário ou senha incorretos.");
+        setError("Usuário ou senha incorretos.");
       }
-    } catch (err: any) {
-      // Captura qualquer erro e seta o erro para o usuário
-      if (axios.isAxiosError(err)) {
-        setError(
-          err.response?.data?.message || `Erro na requisição: ${err.message}`
-        );
-      } else if (err instanceof Error) {
-        setError(`Erro inesperado: ${err.message}`);
-      } else {
-        setError("Erro desconhecido. Tente novamente.");
-      }
+    } catch (err) {
+      setError(
+        axios.isAxiosError(err) && err.response
+          ? "Não foi possível entrar. Verifique o e-mail, a senha e o tipo de usuário."
+          : "Não foi possível conectar. Verifique sua internet e tente novamente.",
+      );
     } finally {
       setLoading(false);
     }
@@ -108,7 +113,7 @@ const AuthPage: React.FC = () => {
           />
         </div>
       </header>
-      {error && <div className="alert alert-danger">{error}</div>}
+
       <main className="flex-grow-1 d-flex align-items-center">
         <div className="mx-auto login-register-block fine-transparent-border white-light d-flex justify-content-center align-items-center overflow-hidden w-75">
           <div className="row w-100 shadow overflow-hidden">
@@ -122,45 +127,96 @@ const AuthPage: React.FC = () => {
             <div className="col-md-6 p-4 terciary">
               <h3 className="text-center mb-4">Login</h3>
 
-              <form onSubmit={handleLogin}>
+              <form
+                noValidate
+                onChangeCapture={(e) =>
+                  clearFieldError((e.target as HTMLInputElement).id)
+                }
+                onSubmit={handleLogin}
+              >
+                <p>* Campo obrigatório</p>
                 <div className="input-block row mb-2 align-items-center mb-3">
                   <div className="col-12 w-100">
+                    <label className="form-label" htmlFor={"email"}>
+                      E-mail *
+                    </label>
                     <input
+                      id={"email"}
+                      aria-invalid={!!fieldErrors["email"]}
+                      aria-describedby={
+                        fieldErrors["email"] ? "email-erro" : undefined
+                      }
                       type="email"
-                      className="form-control input-form"
+                      className={
+                        "form-control input-form" +
+                        (fieldErrors["email"] ? " is-invalid" : "")
+                      }
                       placeholder="Digite seu email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={loading}
                       required
                     />
+                    {fieldErrors["email"] && (
+                      <div
+                        id={"email-erro"}
+                        className="invalid-feedback d-block"
+                      >
+                        {fieldErrors["email"]}
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="input-block row mb-2 align-items-center mb-3">
                   <div className="col-12 w-100 position-relative">
+                    <label className="form-label" htmlFor={"password"}>
+                      Senha *
+                    </label>
                     <input
+                      id={"password"}
+                      aria-invalid={!!fieldErrors["password"]}
+                      aria-describedby={
+                        fieldErrors["password"] ? "password-erro" : undefined
+                      }
                       type={passwordVisible ? "text" : "password"}
-                      className="form-control input-form"
+                      className={
+                        "form-control input-form" +
+                        (fieldErrors["password"] ? " is-invalid" : "")
+                      }
                       placeholder="Digite sua senha"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loading}
                       required
                     />
-                    <span
-                      className="position-absolute top-50 end-0 translate-middle-y me-4"
-                      style={{ cursor: "pointer", zIndex: 100 }}
+                    {fieldErrors["password"] && (
+                      <div
+                        id={"password-erro"}
+                        className="invalid-feedback d-block"
+                      >
+                        {fieldErrors["password"]}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={
+                        passwordVisible ? "Ocultar senha" : "Mostrar senha"
+                      }
+                      aria-pressed={passwordVisible}
+                      className="btn text-white"
+                      disabled={loading}
                       onClick={togglePasswordVisibility}
                     >
                       <FontAwesomeIcon
                         icon={passwordVisible ? faEyeSlash : faEye}
                       />
-                    </span>
+                    </button>
                   </div>
                 </div>
 
-                <div className="row justify-content-center mb-3">
+                <fieldset className="row justify-content-center mb-3">
+                  <legend className="fs-6">Entrar como</legend>
                   <div className="col-auto">
                     <div className="form-check form-check-inline">
                       <input
@@ -199,8 +255,13 @@ const AuthPage: React.FC = () => {
                       </label>
                     </div>
                   </div>
-                </div>
+                </fieldset>
 
+                {error && (
+                  <div role="alert" className="alert alert-danger alert-inline">
+                    {error}
+                  </div>
+                )}
                 <div className="row mt-3 gap-1">
                   <button
                     type="submit"

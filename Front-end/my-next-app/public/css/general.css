@@ -325,3 +325,27 @@ footer {
   background-color: #482d2d3c !important; /* Use !important se necessário para sobrescrever o Bootstrap */
   opacity: 0.7;
 }
+
+/* Feedback persistente no fluxo dos formulários. */
+.alert.alert-inline {
+  position: static;
+  transform: none;
+  top: auto;
+  left: auto;
+  width: 100%;
+  max-width: 100%;
+  animation: alertInlineFadeIn 0.3s forwards;
+}
+@keyframes alertInlineFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Indicador de teclado nos controles, inclusive sobre fundos claros. */
+.btn:focus-visible,
+button:focus-visible,
+.form-check-input:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #212529;
+}

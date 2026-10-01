@@ -1,3 +1,5 @@
+import SearchCombobox from "../SearchCombobox";
+import { focusFirstError } from "../../../utils/validationUtils";
 import React, { useMemo, useState } from "react";
 import styles from "../../styles/cashierPage.module.css";
 import axios from "axios";
@@ -27,9 +29,9 @@ const NewCashier: React.FC<Props> = ({
   id_loja,
 }) => {
   const [vendedorSearchTerm, setVendedorSearchTerm] = useState<string>("");
-  const [showVendedorDropdown, setShowVendedorDropdown] =
-    useState<boolean>(false);
   const [id_funcionario_responsavel, setId_funcionario] = useState<string>("");
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const filteredVendedores = useMemo(() => {
@@ -39,13 +41,21 @@ const NewCashier: React.FC<Props> = ({
     return vendedoresDisponiveis.filter(
       (v) =>
         v.nome.toLowerCase().includes(term) ||
-        (v.cargo && v.cargo.toLowerCase().includes(term))
+        (v.cargo && v.cargo.toLowerCase().includes(term)),
     );
   }, [vendedorSearchTerm, vendedoresDisponiveis]);
 
-  const handleCreateCashier = async () => {
+  const handleCreateCashier = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isLoading) return;
+    setError("");
     if (!id_funcionario_responsavel) {
-      alert("Por favor, selecione um vendedor responsável.");
+      setFieldErrors({
+        vendedorResponsavel: "Selecione um vendedor responsável.",
+      });
+      focusFirstError({
+        vendedorResponsavel: "Selecione um vendedor responsável.",
+      });
       return;
     }
     setIsLoading(true);
@@ -53,16 +63,16 @@ const NewCashier: React.FC<Props> = ({
       const payload = { id_funcionario_responsavel, id_loja };
       const response = await axios.post(
         "https://vl-store-v2.onrender.com/api/caixas",
-        payload
+        payload,
       );
 
       onSave(response.data);
     } catch (error) {
-      alert("Erro ao abrir o caixa. Verifique os dados e tente novamente.");
+      setError("Erro ao abrir o caixa. Verifique os dados e tente novamente.");
       if (axios.isAxiosError(error)) {
         console.error(
           "Erro na requisição:",
-          error.response?.data || error.message
+          error.response?.data || error.message,
         );
       } else {
         console.error("Erro inesperado:", error);
@@ -77,83 +87,62 @@ const NewCashier: React.FC<Props> = ({
       <div className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
         <div className={styles.cardTitle}>Abrir Novo Caixa</div>
 
-        <div className="row mb-3">
-          <div className="col-md-12 position-relative">
-            <label
-              htmlFor="vendedorResponsavel"
-              className="form-label text-white-75 small"
-            >
-              Vendedor Responsável
-            </label>
-            <input
-              type="text"
-              className="form-control input-form"
-              placeholder="Buscar vendedor..."
-              value={vendedorSearchTerm}
-              onChange={(e) => {
-                setVendedorSearchTerm(e.target.value);
-                setShowVendedorDropdown(true);
-              }}
-              onFocus={() => setShowVendedorDropdown(true)}
-              onBlur={() =>
-                setTimeout(() => setShowVendedorDropdown(false), 200)
-              }
-            />
-            {showVendedorDropdown && (
-              <ul
-                className="list-group position-absolute w-100 mt-1 z-index-dropdown bg-dark border border-secondary rounded shadow-sm"
-                style={{
-                  maxHeight: "250px",
-                  overflowY: "auto",
-                }}
+        <form onSubmit={handleCreateCashier} noValidate>
+          <p>* Campo obrigatório</p>
+          <div className="row mb-3">
+            <div className="col-md-12 position-relative">
+              <label
+                htmlFor="vendedorResponsavel"
+                className="form-label text-white-75 small"
               >
-                {filteredVendedores.length === 0 ? (
-                  <li className="list-group-item text-white bg-dark">
-                    Nenhum vendedor encontrado
-                  </li>
-                ) : (
-                  filteredVendedores.map((v) => (
-                    <li
-                      key={v.id_funcionario}
-                      className="list-group-item bg-dark text-white cursor-pointer hover-light"
-                      onClick={() => {
-                        setId_funcionario(v.id_funcionario);
-                        setVendedorSearchTerm(
-                          `${v.nome}${v.cargo ? ` (${v.cargo})` : ""}`
-                        );
-                        setShowVendedorDropdown(false);
-                      }}
-                    >
-                      {v.nome} {v.cargo && `(${v.cargo})`}
-                    </li>
-                  ))
-                )}
-              </ul>
-            )}
-            <input
-              type="hidden"
-              id="id_funcionario_responsavel"
-              value={id_funcionario_responsavel}
-            />
+                Vendedor Responsável *
+              </label>
+              <SearchCombobox
+                id="vendedorResponsavel"
+                value={vendedorSearchTerm}
+                disabled={isLoading}
+                error={fieldErrors.vendedorResponsavel}
+                options={filteredVendedores.map((v) => ({
+                  id: v.id_funcionario,
+                  label: `${v.nome}${v.cargo ? ` (${v.cargo})` : ""}`,
+                }))}
+                onChange={(value) => {
+                  setVendedorSearchTerm(value);
+                  setId_funcionario("");
+                  setFieldErrors({});
+                }}
+                onSelect={(id, label) => {
+                  setId_funcionario(id);
+                  setVendedorSearchTerm(label);
+                  setFieldErrors({});
+                }}
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="d-flex justify-content-center mt-4">
-          <button
-            className="btn primaria mx-2 footerButton"
-            onClick={onCancel}
-            disabled={isLoading}
-          >
-            Cancelar
-          </button>
-          <button
-            className="btn primaria mx-2 footerButton"
-            onClick={handleCreateCashier}
-            disabled={isLoading || !id_funcionario_responsavel}
-          >
-            {isLoading ? "Salvando..." : "Salvar"}
-          </button>
-        </div>
+          {error && (
+            <div role="alert" className="alert alert-danger alert-inline">
+              {error}
+            </div>
+          )}
+          <div className="d-flex justify-content-center mt-4">
+            <button
+              className="btn primaria mx-2 footerButton"
+              type="button"
+              onClick={onCancel}
+              disabled={isLoading}
+            >
+              Cancelar
+            </button>
+            <button
+              className="btn primaria mx-2 footerButton"
+              type="submit"
+              disabled={isLoading || !id_funcionario_responsavel}
+            >
+              {isLoading ? "Salvando..." : "Salvar"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

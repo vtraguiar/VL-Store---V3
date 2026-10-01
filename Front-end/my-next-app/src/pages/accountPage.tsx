@@ -1,3 +1,11 @@
+import { IMaskInput } from "react-imask";
+import {
+  isValidEmail,
+  isValidCpfCnpj,
+  isValidPhone,
+  extractDigitsOnly,
+  focusFirstError,
+} from "../utils/validationUtils";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
@@ -30,6 +38,16 @@ const AccountPage = () => {
   const [originalData, setOriginalData] = useState<StoreData | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const clearFieldError = (id: string) =>
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+  const [success, setSuccess] = useState(false);
+  const [leaveRequested, setLeaveRequested] = useState(false);
 
   useEffect(() => {
     const jwtToken = localStorage.getItem("jwtToken");
@@ -64,13 +82,15 @@ const AccountPage = () => {
             Authorization: `Bearer ${jwtToken}`,
           },
           timeout: 2000,
-        }
+        },
       );
 
       localStorage.setItem("selectedStore", JSON.stringify(response.data));
       return response.data;
-    } catch (error) {
-      alert("Erro desconhecido, tente novamente mais tarde.");
+    } catch {
+      setError(
+        "Não foi possível carregar a loja. Verifique sua conexão e tente novamente.",
+      );
     }
   };
 
@@ -84,9 +104,11 @@ const AccountPage = () => {
           nome: data.nome || "",
           senha: data.senha || "",
           email: data.email || "",
-          cpf_cnpj_proprietario_loja: data.cpf_cnpj_proprietario_loja || "",
+          cpf_cnpj_proprietario_loja: extractDigitsOnly(
+            data.cpf_cnpj_proprietario_loja || "",
+          ),
           data_nasc_proprietario: data.data_nasc_proprietario || "",
-          telefone: data.telefone || "",
+          telefone: extractDigitsOnly(data.telefone || ""),
           id_loja: data.id_loja || "",
         };
         setStoreData(parsed);
@@ -102,10 +124,11 @@ const AccountPage = () => {
                 nome: data.nome || "",
                 senha: data.senha || "",
                 email: data.email || "",
-                cpf_cnpj_proprietario_loja:
+                cpf_cnpj_proprietario_loja: extractDigitsOnly(
                   data.cpf_cnpj_proprietario_loja || "",
+                ),
                 data_nasc_proprietario: data.data_nasc_proprietario || "",
-                telefone: data.telefone || "",
+                telefone: extractDigitsOnly(data.telefone || ""),
                 id_loja: data.id_loja || "",
               };
               setStoreData(parsed);
@@ -114,7 +137,7 @@ const AccountPage = () => {
           } catch (parseError) {
             console.error(
               "Erro ao parsear dados da loja do localStorage:",
-              parseError
+              parseError,
             );
             setError("Erro ao carregar dados armazenados da loja.");
           }
@@ -135,35 +158,73 @@ const AccountPage = () => {
     return JSON.stringify(originalData) !== JSON.stringify(storeData);
   };
 
-  const saveChanges = async () => {
+  const saveChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!originalData || isSaving || !hasStoreDataChanged()) return;
+    setError("");
+    setSuccess(false);
+    const errors: Record<string, string> = {};
+    if (!storeData.nome.trim()) errors.nome = "Informe o nome da loja.";
+    if (!isValidEmail(storeData.email))
+      errors.email = "Informe um e-mail válido.";
+    if (!isValidCpfCnpj(storeData.cpf_cnpj_proprietario_loja))
+      errors.cpf_cnpj_proprietario_loja =
+        "Informe um CPF/CNPJ válido, incluindo os dígitos verificadores.";
+    if (!isValidPhone(extractDigitsOnly(storeData.telefone)))
+      errors.telefone = "Informe o telefone com DDD e 10 ou 11 dígitos.";
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      focusFirstError(errors);
+      return;
+    }
+    const payload: Record<string, string> = {};
+    for (const key of [
+      "nome",
+      "email",
+      "cpf_cnpj_proprietario_loja",
+      "telefone",
+    ] as const) {
+      if (storeData[key] !== originalData[key])
+        payload[key] =
+          key === "telefone" || key === "cpf_cnpj_proprietario_loja"
+            ? extractDigitsOnly(storeData[key])
+            : storeData[key];
+    }
+    setIsSaving(true);
     try {
-      setIsSaving(true);
-
-      // Extrai senha e pega o resto dos dados
-      const { senha, ...dataWithoutPassword } = storeData;
-
       await axios.patch(
         `https://vl-store-v2.onrender.com/api/lojas/${storeData.id_loja}`,
-        dataWithoutPassword, // envia sem a senha
-        { headers: getAuthHeaders() }
+        payload,
+        { headers: getAuthHeaders() },
       );
-
       localStorage.setItem("userData", JSON.stringify(storeData));
-      setOriginalData(storeData);
-    } catch (err) {
-      console.error("Erro ao salvar loja:", err);
-      setError("Erro ao salvar loja");
-      setTimeout(() => setError(""), 3000);
+      localStorage.setItem(
+        "selectedStore",
+        JSON.stringify({ data: storeData }),
+      );
+      setOriginalData({ ...storeData });
+      setSuccess(true);
+      if (leaveRequested) router.push("/menuPage");
+    } catch {
+      setError(
+        "Não foi possível salvar a loja. Verifique os dados e sua conexão e tente novamente.",
+      );
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleBackClick = async () => {
-    if (hasStoreDataChanged()) {
-      await saveChanges();
-    }
-    router.push("/menuPage");
+  const handleBackClick = () => {
+    if (hasStoreDataChanged()) setLeaveRequested(true);
+    else router.push("/menuPage");
+  };
+
+  const cancelChanges = () => {
+    if (originalData) setStoreData({ ...originalData });
+    setFieldErrors({});
+    setError("");
+    setSuccess(false);
+    setLeaveRequested(false);
   };
 
   const [isDeleting, setIsDeleting] = useState(false);
@@ -173,7 +234,7 @@ const AccountPage = () => {
       setIsDeleting(true);
       await axios.delete(
         `https://vl-store-v2.onrender.com/api/lojas/${storeData.id_loja}`,
-        { headers: getAuthHeaders() }
+        { headers: getAuthHeaders() },
       );
       // Limpa o localStorage ao deletar a conta
       localStorage.removeItem("jwtToken");
@@ -184,7 +245,6 @@ const AccountPage = () => {
     } catch (err) {
       console.error("Erro ao deletar loja:", err);
       setError("Erro ao deletar loja");
-      setTimeout(() => setError(""), 3000);
     } finally {
       setIsDeleting(false);
     }
@@ -195,71 +255,226 @@ const AccountPage = () => {
       <div className="product-page d-flex justify-content-center align-items-center terciary p-4 flex-column rounded-5 white-light">
         <h3 className="col-12 text-center">Editar Loja</h3>
 
-        {error && (
-          <div className="alert alert-danger col-12 text-center mt-2">
-            {error}
-          </div>
-        )}
-
         {isSaving && (
-          <div className="alert alert-info col-12 text-center mt-2">
+          <div
+            role="status"
+            className="alert alert-info alert-inline col-12 text-center mt-2"
+          >
             Salvando dados...
           </div>
         )}
         {isDeleting && (
-          <div className="alert alert-info col-12 text-center mt-2">
+          <div
+            role="status"
+            className="alert alert-info alert-inline col-12 text-center mt-2"
+          >
             Deletando conta...
           </div>
         )}
 
-        <form className="row w-100 justify-content-between">
+        <form
+          noValidate
+          onChangeCapture={(e) =>
+            clearFieldError((e.target as HTMLInputElement).id)
+          }
+          onSubmit={saveChanges}
+          className="row w-100 justify-content-between"
+        >
+          <p>* Campo obrigatório</p>
           <div className="col-12 w-100">
             <div className="row product-info w-100 d-flex justify-content-between align-items-between">
               <div className="mx-auto col-12 p-4 info-base row">
                 <h5 className="text-center mb-2">Informações gerais</h5>
 
-                <label className="product-label">Nome da loja:</label>
+                <label className="form-label" htmlFor={"nome"}>
+                  Nome da loja *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  disabled={isSaving || isDeleting}
+                  id={"nome"}
+                  aria-invalid={!!fieldErrors["nome"]}
+                  aria-describedby={
+                    fieldErrors["nome"] ? "nome-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["nome"] ? " is-invalid" : "")
+                  }
                   name="nome"
                   placeholder="Nome"
                   value={storeData.nome}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["nome"] && (
+                  <div id={"nome-erro"} className="invalid-feedback d-block">
+                    {fieldErrors["nome"]}
+                  </div>
+                )}
 
-                <label className="product-label">CPF/CNPJ*:</label>
-                <input
-                  className="mb-3 produto-input"
+                <label
+                  className="form-label"
+                  htmlFor={"cpf_cnpj_proprietario_loja"}
+                >
+                  CPF/CNPJ *
+                </label>
+                <IMaskInput
+                  unmask={true}
+                  disabled={isSaving || isDeleting}
+                  mask={[
+                    { mask: "000.000.000-00" },
+                    { mask: "00.000.000/0000-00" },
+                  ]}
+                  id={"cpf_cnpj_proprietario_loja"}
+                  aria-invalid={!!fieldErrors["cpf_cnpj_proprietario_loja"]}
+                  aria-describedby={
+                    fieldErrors["cpf_cnpj_proprietario_loja"]
+                      ? "cpf_cnpj_proprietario_loja-erro"
+                      : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["cpf_cnpj_proprietario_loja"]
+                      ? " is-invalid"
+                      : "")
+                  }
                   name="cpf_cnpj_proprietario_loja"
                   placeholder="Digite o CPF ou CNPJ"
                   value={storeData.cpf_cnpj_proprietario_loja}
-                  onChange={handleChange}
+                  onAccept={(value: string) => {
+                    setStoreData((prev) => ({
+                      ...prev,
+                      cpf_cnpj_proprietario_loja: extractDigitsOnly(value),
+                    }));
+                    clearFieldError("cpf_cnpj_proprietario_loja");
+                  }}
                   required
                 />
+                {fieldErrors["cpf_cnpj_proprietario_loja"] && (
+                  <div
+                    id={"cpf_cnpj_proprietario_loja-erro"}
+                    className="invalid-feedback d-block"
+                  >
+                    {fieldErrors["cpf_cnpj_proprietario_loja"]}
+                  </div>
+                )}
 
-                <label className="product-label">Email:</label>
+                <label className="form-label" htmlFor={"email"}>
+                  E-mail *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  disabled={isSaving || isDeleting}
+                  id={"email"}
+                  aria-invalid={!!fieldErrors["email"]}
+                  aria-describedby={
+                    fieldErrors["email"] ? "email-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["email"] ? " is-invalid" : "")
+                  }
                   name="email"
                   placeholder="Digite o email"
                   value={storeData.email}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["email"] && (
+                  <div id={"email-erro"} className="invalid-feedback d-block">
+                    {fieldErrors["email"]}
+                  </div>
+                )}
 
-                <label className="product-label">Telefone:</label>
-                <input
-                  className="mb-3 produto-input"
+                <label className="form-label" htmlFor={"telefone"}>
+                  Telefone *
+                </label>
+                <IMaskInput
+                  unmask={true}
+                  disabled={isSaving || isDeleting}
+                  mask={[
+                    { mask: "(00) 0000-0000" },
+                    { mask: "(00) 00000-0000" },
+                  ]}
+                  id={"telefone"}
+                  aria-invalid={!!fieldErrors["telefone"]}
+                  aria-describedby={
+                    fieldErrors["telefone"] ? "telefone-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["telefone"] ? " is-invalid" : "")
+                  }
                   name="telefone"
                   placeholder="Ex: (99) 99999-9999"
                   value={storeData.telefone}
-                  onChange={handleChange}
+                  onAccept={(value: string) => {
+                    setStoreData((prev) => ({
+                      ...prev,
+                      telefone: extractDigitsOnly(value),
+                    }));
+                    clearFieldError("telefone");
+                  }}
                 />
+                {fieldErrors["telefone"] && (
+                  <div
+                    id={"telefone-erro"}
+                    className="invalid-feedback d-block"
+                  >
+                    {fieldErrors["telefone"]}
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
+          {error && (
+            <div
+              role="alert"
+              className="alert alert-danger alert-inline col-12 text-center mt-2"
+            >
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="alert alert-success alert-inline" role="status">
+              Alterações salvas.
+            </div>
+          )}
+          {leaveRequested && (
+            <div className="alert alert-warning alert-inline" role="alert">
+              Há alterações não salvas.{" "}
+              <button
+                type="submit"
+                className="btn btn-sm btn-outline-dark ms-2"
+                disabled={isSaving}
+              >
+                Salvar
+              </button>{" "}
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-dark ms-2"
+                disabled={isSaving}
+                onClick={() => router.push("/menuPage")}
+              >
+                Descartar
+              </button>
+            </div>
+          )}
+          <button
+            type="submit"
+            className="btn primaria"
+            disabled={!hasStoreDataChanged() || isSaving}
+          >
+            Salvar alterações
+          </button>
+          <button
+            type="button"
+            className="btn primaria"
+            disabled={!hasStoreDataChanged() || isSaving}
+            onClick={cancelChanges}
+          >
+            Cancelar alterações
+          </button>
           <div className="d-flex justify-content-between w-100 mt-3">
             <button
               type="button"
@@ -273,6 +488,7 @@ const AccountPage = () => {
             <button
               type="button"
               className="down-btn btn col-12 col-md-3 primaria"
+              disabled={isSaving || isDeleting}
               onClick={deleteStore}
             >
               Deletar Loja

@@ -1,3 +1,4 @@
+import { focusFirstError } from "../utils/validationUtils";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
@@ -22,6 +23,13 @@ const AddProduct = () => {
 
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const clearFieldError = (id: string) =>
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
 
   useEffect(() => {
     const jwtToken = localStorage.getItem("jwtToken");
@@ -44,7 +52,7 @@ const AddProduct = () => {
 
   const handleVariationChange = (
     index: number,
-    e: React.ChangeEvent<HTMLInputElement>
+    e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const { name, value } = e.target;
     const updatedVariations = [...variations];
@@ -68,6 +76,19 @@ const AddProduct = () => {
     const updatedVariations = [...variations];
     updatedVariations.splice(index, 1);
     setVariations(updatedVariations);
+    setFieldErrors((previous) =>
+      Object.fromEntries(
+        Object.entries(previous).flatMap(([key, message]) => {
+          const match = key.match(/^variacao-(\d+)-(.+)$/);
+          if (!match) return [[key, message]];
+          const row = Number(match[1]);
+          if (row === index) return [];
+          return [
+            [`variacao-${row > index ? row - 1 : row}-${match[2]}`, message],
+          ];
+        }),
+      ),
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -79,20 +100,30 @@ const AddProduct = () => {
     const jwtToken = localStorage.getItem("jwtToken");
     const userData = localStorage.getItem("userData");
 
-    if (
-      !productData.referencia ||
-      !productData.nome ||
-      !productData.categoria ||
-      !productData.material ||
-      !productData.genero ||
-      variations.some(
-        (v) => !v.descricao_variacao || v.quant_variacao <= 0 || v.valor <= 0
-      )
-    ) {
-      setError("Preencha todos os campos obrigatórios corretamente.");
+    const errors: Record<string, string> = {};
+    for (const [key, label] of Object.entries({
+      referencia: "referência",
+      nome: "nome",
+      categoria: "categoria",
+      material: "material",
+    })) {
+      if (!productData[key as keyof typeof productData].trim())
+        errors[key] = `Informe ${label} do produto.`;
+    }
+    variations.forEach((v, index) => {
+      if (!v.descricao_variacao.trim())
+        errors[`variacao-${index}-descricao`] =
+          "Informe a descrição da variação.";
+      if (!Number.isInteger(v.quant_variacao) || v.quant_variacao < 1)
+        errors[`variacao-${index}-quantidade`] =
+          "Informe a quantidade inteira (mínimo 1).";
+      if (!Number.isFinite(v.valor) || v.valor < 0.01)
+        errors[`variacao-${index}-valor`] = "Informe o valor (mínimo R$ 0,01).";
+    });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
       setLoading(false);
-      // Limpa erro depois de 3 segundos
-      setTimeout(() => setError(""), 3000);
+      focusFirstError(errors);
       return;
     }
 
@@ -123,7 +154,7 @@ const AddProduct = () => {
             "Content-Type": "application/json",
           },
           timeout: 5000,
-        }
+        },
       );
 
       if (response.status === 201) {
@@ -133,15 +164,19 @@ const AddProduct = () => {
           pushBackToProducts();
         }, 3000);
       }
-    } catch (error: any) {
-      setError(`Erro ao adicionar produto. ${error.response.data.message}.`);
-      setTimeout(() => setError(""), 3000);
+    } catch (error) {
+      setError(
+        axios.isAxiosError(error) && error.response?.status === 409
+          ? "Referência já cadastrada nesta loja."
+          : "Não foi possível adicionar o produto. Verifique os dados e sua conexão e tente novamente.",
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const clearForm = () => {
+    setFieldErrors({});
     setProductData({
       referencia: "",
       nome: "",
@@ -160,74 +195,160 @@ const AddProduct = () => {
         <h3 className="col-12 text-center">Adicionar Novo Produto</h3>
 
         {success && (
-          <div className="alert alert-success col-12 text-center mt-2">
+          <div
+            role="status"
+            className="alert alert-success alert-inline col-12 text-center mt-2"
+          >
             Produto cadastrado com sucesso! Redirecionando...
           </div>
         )}
 
-        {error && (
-          <div className="alert alert-danger col-12 text-center mt-2">
-            {error}
-          </div>
-        )}
-
         <form
+          noValidate
+          onChangeCapture={(e) =>
+            clearFieldError((e.target as HTMLInputElement).id)
+          }
           onSubmit={handleSubmit}
           className="row w-100 justify-content-between"
         >
+          <p>* Campo obrigatório</p>
           <div className="col-12 w-100">
             <div className="row product-info w-100 d-flex justify-content-between align-items-between">
               <div className="mx-auto col-12 p-4 info-base row">
                 <h5 className="text-center mb-2">Informações gerais</h5>
 
-                <label className="product-label">Referência*:</label>
+                <label className="form-label" htmlFor={"referencia"}>
+                  Referência *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  id={"referencia"}
+                  aria-invalid={!!fieldErrors["referencia"]}
+                  aria-describedby={
+                    fieldErrors["referencia"] ? "referencia-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["referencia"] ? " is-invalid" : "")
+                  }
                   name="referencia"
                   placeholder="Ex: REF0008"
                   value={productData.referencia}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["referencia"] && (
+                  <div
+                    id={"referencia-erro"}
+                    className="invalid-feedback d-block"
+                  >
+                    {fieldErrors["referencia"]}
+                  </div>
+                )}
 
-                <label className="product-label">Nome do Produto*:</label>
+                <label className="form-label" htmlFor={"nome"}>
+                  Nome do produto *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  id={"nome"}
+                  aria-invalid={!!fieldErrors["nome"]}
+                  aria-describedby={
+                    fieldErrors["nome"] ? "nome-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["nome"] ? " is-invalid" : "")
+                  }
                   name="nome"
                   placeholder="Ex: Camiseta Polo Levi's"
                   value={productData.nome}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["nome"] && (
+                  <div id={"nome-erro"} className="invalid-feedback d-block">
+                    {fieldErrors["nome"]}
+                  </div>
+                )}
 
-                <label className="product-label">Categoria*:</label>
+                <label className="form-label" htmlFor={"categoria"}>
+                  Categoria *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  id={"categoria"}
+                  aria-invalid={!!fieldErrors["categoria"]}
+                  aria-describedby={
+                    fieldErrors["categoria"] ? "categoria-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["categoria"] ? " is-invalid" : "")
+                  }
                   name="categoria"
                   placeholder="Ex: Roupas"
                   value={productData.categoria}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["categoria"] && (
+                  <div
+                    id={"categoria-erro"}
+                    className="invalid-feedback d-block"
+                  >
+                    {fieldErrors["categoria"]}
+                  </div>
+                )}
 
-                <label className="product-label">Material*:</label>
+                <label className="form-label" htmlFor={"material"}>
+                  Material *
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  id={"material"}
+                  aria-invalid={!!fieldErrors["material"]}
+                  aria-describedby={
+                    fieldErrors["material"] ? "material-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["material"] ? " is-invalid" : "")
+                  }
                   name="material"
                   placeholder="Ex: Algodão"
                   value={productData.material}
                   onChange={handleChange}
                   required
                 />
+                {fieldErrors["material"] && (
+                  <div
+                    id={"material-erro"}
+                    className="invalid-feedback d-block"
+                  >
+                    {fieldErrors["material"]}
+                  </div>
+                )}
 
-                <label className="product-label">Gênero:</label>
+                <label className="form-label" htmlFor={"genero"}>
+                  Gênero
+                </label>
                 <input
-                  className="mb-3 produto-input"
+                  id={"genero"}
+                  aria-invalid={!!fieldErrors["genero"]}
+                  aria-describedby={
+                    fieldErrors["genero"] ? "genero-erro" : undefined
+                  }
+                  className={
+                    "mb-3 produto-input" +
+                    (fieldErrors["genero"] ? " is-invalid" : "")
+                  }
                   name="genero"
                   placeholder="Ex: Masculino"
                   value={productData.genero}
                   onChange={handleChange}
                 />
+                {fieldErrors["genero"] && (
+                  <div id={"genero-erro"} className="invalid-feedback d-block">
+                    {fieldErrors["genero"]}
+                  </div>
+                )}
               </div>
 
               <div className="col-12 w-100">
@@ -239,50 +360,130 @@ const AddProduct = () => {
                     className="p-1 mx-auto variacao row align-items-center pb-4 justify-content-evenly mb-2 w-100"
                   >
                     <div className="col-12 col-md-6">
-                      <p className="col-12 mt-2 text-center">Descrição*</p>
+                      <label
+                        className="form-label"
+                        htmlFor={`variacao-${index}-descricao`}
+                      >
+                        Descrição *
+                      </label>
                       <input
+                        id={`variacao-${index}-descricao`}
+                        aria-invalid={
+                          !!fieldErrors[`variacao-${index}-descricao`]
+                        }
+                        aria-describedby={
+                          fieldErrors[`variacao-${index}-descricao`]
+                            ? `variacao-${index}-descricao-erro`
+                            : undefined
+                        }
                         type="text"
-                        className="col-12 produto-input"
+                        className={
+                          "col-12 produto-input" +
+                          (fieldErrors[`variacao-${index}-descricao`]
+                            ? " is-invalid"
+                            : "")
+                        }
                         placeholder="Ex: Tamanho GG - Azul"
                         name="descricao_variacao"
                         value={variation.descricao_variacao}
                         onChange={(e) => handleVariationChange(index, e)}
                         required
                       />
+                      {fieldErrors[`variacao-${index}-descricao`] && (
+                        <div
+                          id={`variacao-${index}-descricao-erro`}
+                          className="invalid-feedback d-block"
+                        >
+                          {fieldErrors[`variacao-${index}-descricao`]}
+                        </div>
+                      )}
                     </div>
 
                     <div className="col-6 col-md-2">
-                      <p className="col-12 m-2 text-center">Quantidade*</p>
+                      <label
+                        className="form-label"
+                        htmlFor={`variacao-${index}-quantidade`}
+                      >
+                        Quantidade *
+                      </label>
                       <input
+                        id={`variacao-${index}-quantidade`}
+                        aria-invalid={
+                          !!fieldErrors[`variacao-${index}-quantidade`]
+                        }
+                        aria-describedby={
+                          fieldErrors[`variacao-${index}-quantidade`]
+                            ? `variacao-${index}-quantidade-erro`
+                            : undefined
+                        }
                         type="number"
-                        className="col-12 produto-input"
+                        className={
+                          "col-12 produto-input" +
+                          (fieldErrors[`variacao-${index}-quantidade`]
+                            ? " is-invalid"
+                            : "")
+                        }
                         placeholder="Ex: 10"
                         name="quant_variacao"
                         value={variation.quant_variacao || ""}
                         onChange={(e) => handleVariationChange(index, e)}
                         required
-                        min="0"
+                        min="1"
                       />
+                      {fieldErrors[`variacao-${index}-quantidade`] && (
+                        <div
+                          id={`variacao-${index}-quantidade-erro`}
+                          className="invalid-feedback d-block"
+                        >
+                          {fieldErrors[`variacao-${index}-quantidade`]}
+                        </div>
+                      )}
                     </div>
 
                     <div className="col-6 col-md-2">
-                      <p className="col-12 m-2 text-center">Valor* (R$)</p>
+                      <label
+                        className="form-label"
+                        htmlFor={`variacao-${index}-valor`}
+                      >
+                        Valor (R$) *
+                      </label>
                       <input
+                        id={`variacao-${index}-valor`}
+                        aria-invalid={!!fieldErrors[`variacao-${index}-valor`]}
+                        aria-describedby={
+                          fieldErrors[`variacao-${index}-valor`]
+                            ? `variacao-${index}-valor-erro`
+                            : undefined
+                        }
                         type="number"
-                        className="col-12 produto-input"
+                        className={
+                          "col-12 produto-input" +
+                          (fieldErrors[`variacao-${index}-valor`]
+                            ? " is-invalid"
+                            : "")
+                        }
                         placeholder="Ex: 79.90"
                         name="valor"
                         step="0.01"
                         value={variation.valor || ""}
                         onChange={(e) => handleVariationChange(index, e)}
                         required
-                        min="0"
+                        min="0.01"
                       />
+                      {fieldErrors[`variacao-${index}-valor`] && (
+                        <div
+                          id={`variacao-${index}-valor-erro`}
+                          className="invalid-feedback d-block"
+                        >
+                          {fieldErrors[`variacao-${index}-valor`]}
+                        </div>
+                      )}
                     </div>
 
                     <button
                       type="button"
                       className="col-12 col-md-1 mt-4 btn-delete rounded-5"
+                      aria-label={`Remover variação ${index + 1}`}
                       onClick={() => removeVariation(index)}
                       disabled={variations.length <= 1}
                     >
@@ -302,6 +503,14 @@ const AddProduct = () => {
             </div>
           </div>
 
+          {error && (
+            <div
+              role="alert"
+              className="alert alert-danger alert-inline col-12 text-center mt-2"
+            >
+              {error}
+            </div>
+          )}
           <div className="d-flex justify-content-between w-100 mt-3">
             <button
               type="button"
